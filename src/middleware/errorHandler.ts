@@ -3,6 +3,7 @@ import logger from '../utils/logger';
 import { AppError } from '../errors/appErrors';
 import { ValidationError } from '../errors/validationError';
 
+
 export const errorHandler = (
     error: unknown,
     req: Request,

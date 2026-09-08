@@ -2,12 +2,14 @@ import express, { type Request, type Response } from "express";
 import { errorHandler } from "./middleware/errorHandler";
 import userRouter from "./modules/users/userRoute";
 import {randomId} from './middleware/requestId';
+import {requestLogger} from './middleware/requestLogger'
 const app = express();
 const PORT= 3001;
 
 app.use(express.json());
 
 app.use(randomId)
+app.use(requestLogger)
 
 
 // routes
