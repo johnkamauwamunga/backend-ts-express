@@ -47,6 +47,36 @@ export class UserService {
     return newUser;
   };
 
+  getAllUsers = async()=>{
+    try{
+
+      const key =`users:all`;
+
+      // check if the cache has data
+      const cachedUsers=await redisServer.get('key');
+
+      if(cachedUsers){
+
+        // logger.info({
+        //         logger.info({ : id }, "Cache hit");
+        // })
+        return cachedUsers
+      }
+
+      // cache miss
+      const users = await prisma.user.findMany();
+
+      // update the cache
+      await redisServer.set(key, JSON.stringify(users));
+      return users
+
+    }catch(error){
+      throw new SystemError("Failed to generate new user")
+    }
+  }
+
+
+
   getUserById = async (id: any) => {
     const userId = parseInt(id, 10);
 
