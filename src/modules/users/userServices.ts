@@ -53,14 +53,14 @@ export class UserService {
       const key =`users:all`;
 
       // check if the cache has data
-      const cachedUsers=await redisServer.get('key');
+      const cachedUsers=await redisServer.get(key);
 
       if(cachedUsers){
 
         // logger.info({
         //         logger.info({ : id }, "Cache hit");
         // })
-        return cachedUsers
+        return JSON.parse(cachedUsers)
       }
 
       // cache miss

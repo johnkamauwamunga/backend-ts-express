@@ -57,4 +57,11 @@ getUserById = async (req: Request, res: Response, next: NextFunction) => {
     next(error);
   }
 };
+
+updateUser = async (req: Request, res: Response, next: NextFunction) => {
+
+  const userData= req.body
+}
+
+
 }
