@@ -424,3 +424,576 @@ Specifically, I want you to identify:
 3. What does `name` represent?
 4. What gets printed?
 
+Absolutely. This is worth slowing down for, because **`new Promise((resolve, reject) => {})` is one of those pieces that, once it clicks, makes a lot of Node.js code suddenly make sense.**
+
+Let's dissect it from the outside in.
+
+## 1. Start with this
+
+```ts
+function waitTwoSeconds(): Promise<string> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve("Two seconds are done");
+    }, 2000);
+  });
+}
+```
+
+Don't worry about `async/await` yet.
+
+Our question is:
+
+> **What exactly is `new Promise(...)` doing?**
+
+---
+
+## 2. A Promise represents future work
+
+When we do:
+
+```ts
+new Promise(...)
+```
+
+we are creating an object that represents an operation whose result **isn't available yet**.
+
+Think:
+
+```text
+Promise
+   │
+   ├── PENDING       ← currently working
+   │
+   ├── FULFILLED     ← succeeded
+   │
+   └── REJECTED      ← failed
+```
+
+When the Promise is first created:
+
+```text
+PENDING
+```
+
+It stays pending until someone tells it:
+
+> "We're done successfully."
+
+or:
+
+> "We failed."
+
+---
+
+# 3. Now look at the strange part
+
+```ts
+new Promise((resolve) => {
+```
+
+Remember our callback lesson?
+
+This:
+
+```ts
+(resolve) => {
+   ...
+}
+```
+
+is a **callback function**.
+
+We're passing that function to the `Promise` constructor.
+
+So conceptually:
+
+```text
+You
+ │
+ │ give function
+ ↓
+Promise
+ │
+ │ calls the function
+ ↓
+(resolve)
+```
+
+But now something interesting happens.
+
+**Promise gives our callback a function called `resolve`.**
+
+---
+
+# 4. What is `resolve`?
+
+`resolve` is a function that Promise gives us.
+
+Its job is:
+
+> **Tell the Promise that the operation succeeded.**
+
+For example:
+
+```ts
+resolve("Two seconds are done");
+```
+
+means:
+
+```text
+Promise was:
+PENDING
+
+        ↓
+
+resolve(...)
+
+        ↓
+
+Promise becomes:
+FULFILLED
+```
+
+And the value:
+
+```text
+"Two seconds are done"
+```
+
+becomes the result of the Promise.
+
+---
+
+# 5. Let's remove the timer for a moment
+
+Look at this:
+
+```ts
+const promise = new Promise((resolve) => {
+  resolve("Hello");
+});
+```
+
+The sequence is:
+
+```text
+new Promise()
+      ↓
+Promise starts PENDING
+      ↓
+callback executes
+      ↓
+resolve("Hello")
+      ↓
+Promise becomes FULFILLED
+      ↓
+result = "Hello"
+```
+
+So if we later do:
+
+```ts
+const result = await promise;
+```
+
+we get:
+
+```ts
+result === "Hello"
+```
+
+---
+
+# 6. Now put the timer back
+
+Our original:
+
+```ts
+function waitTwoSeconds(): Promise<string> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve("Two seconds are done");
+    }, 2000);
+  });
+}
+```
+
+Let's execute it.
+
+### At the beginning
+
+```ts
+waitTwoSeconds();
+```
+
+creates the Promise.
+
+```text
+PENDING
+```
+
+Then:
+
+```ts
+setTimeout(...)
+```
+
+registers the timer.
+
+JavaScript continues doing other things.
+
+After two seconds:
+
+```ts
+resolve("Two seconds are done");
+```
+
+runs.
+
+Now:
+
+```text
+PENDING
+   ↓
+FULFILLED
+```
+
+And the Promise's result is:
+
+```text
+"Two seconds are done"
+```
+
+---
+
+# 7. Now what is `reject`?
+
+This is the other half.
+
+A Promise can succeed:
+
+```ts
+resolve(value);
+```
+
+or fail:
+
+```ts
+reject(error);
+```
+
+So:
+
+```ts
+function doSomething(): Promise<string> {
+  return new Promise((resolve, reject) => {
+
+    const success = true;
+
+    if (success) {
+      resolve("Everything worked");
+    } else {
+      reject(new Error("Something went wrong"));
+    }
+
+  });
+}
+```
+
+The lifecycle is:
+
+```text
+              Promise
+                 │
+              PENDING
+              /     \
+             /       \
+            ↓         ↓
+       resolve()    reject()
+            ↓         ↓
+       FULFILLED   REJECTED
+```
+
+---
+
+# 8. Why do we need both?
+
+Because real applications fail.
+
+Imagine our Eventra email:
+
+```ts
+function sendEmail(email: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+
+    // Contact email provider...
+
+    if (emailProviderSucceeded) {
+      resolve();
+    } else {
+      reject(new Error("Email provider failed"));
+    }
+
+  });
+}
+```
+
+If successful:
+
+```text
+send email
+   ↓
+resolve()
+   ↓
+worker continues
+```
+
+If it fails:
+
+```text
+send email
+   ↓
+reject(error)
+   ↓
+worker knows it failed
+```
+
+And **this becomes very important when we get to BullMQ retries.**
+
+BullMQ can detect that our worker's Promise failed and then apply retry behavior.
+
+---
+
+# 9. Now connect it to `async/await`
+
+Suppose:
+
+```ts
+function waitTwoSeconds(): Promise<string> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve("Done!");
+    }, 2000);
+  });
+}
+```
+
+We can do:
+
+```ts
+async function main() {
+  const result = await waitTwoSeconds();
+
+  console.log(result);
+}
+```
+
+The important mental model:
+
+```text
+waitTwoSeconds()
+       ↓
+returns Promise
+       ↓
+PENDING
+       ↓
+2 seconds
+       ↓
+resolve("Done!")
+       ↓
+FULFILLED
+       ↓
+await receives "Done!"
+       ↓
+result = "Done!"
+```
+
+So `await` is essentially saying:
+
+> **"When this Promise successfully produces its result, give me that result and continue from here."**
+
+---
+
+# 10. And if it rejects?
+
+Then:
+
+```ts
+async function main() {
+  const result = await doSomething();
+}
+```
+
+will throw an error.
+
+We can handle it:
+
+```ts
+async function main() {
+  try {
+    const result = await doSomething();
+
+    console.log(result);
+  } catch (error) {
+    console.log("Something failed");
+  }
+}
+```
+
+So:
+
+```text
+resolve()
+   ↓
+await gets result
+
+
+reject()
+   ↓
+await throws error
+```
+
+---
+
+# 11. Now look at our BullMQ Worker again
+
+This should look much less mysterious now:
+
+```ts
+new Worker("email", async (job) => {
+  await sendEmail(job.data.email);
+});
+```
+
+There are several layers here:
+
+### Layer 1 — Callback
+
+```ts
+async (job) => {
+   ...
+}
+```
+
+BullMQ will call this.
+
+### Layer 2 — Promise
+
+Because the callback is `async`, it automatically returns a Promise.
+
+Conceptually:
+
+```ts
+async (job) => {
+   await sendEmail(...);
+}
+```
+
+is a function that says:
+
+> "I will eventually tell BullMQ whether processing succeeded or failed."
+
+### Layer 3 — Actual asynchronous operation
+
+```ts
+await sendEmail(...)
+```
+
+The email operation itself returns a Promise.
+
+### Layer 4 — Success/failure
+
+If email succeeds:
+
+```text
+sendEmail()
+   ↓
+resolve
+   ↓
+worker callback completes successfully
+   ↓
+BullMQ marks job COMPLETED
+```
+
+If email fails:
+
+```text
+sendEmail()
+   ↓
+reject / throws
+   ↓
+worker callback fails
+   ↓
+BullMQ marks job FAILED
+   ↓
+retry can happen
+```
+
+**And now we're starting to see why callbacks + Promises are so important for background jobs.**
+
+---
+
+## The mental model I want you to keep
+
+```text
+CALLBACK
+"Here's a function. Call it later."
+
+       ↓
+
+PROMISE
+"Here's an object representing future success/failure."
+
+       ↓
+
+resolve()
+"The operation succeeded."
+
+reject()
+"The operation failed."
+
+       ↓
+
+ASYNC/AWAIT
+"Let me work with those future results in readable code."
+
+       ↓
+
+BULLMQ WORKER
+"Give me a job, I'll perform asynchronous work,
+and I'll tell you whether that work succeeded or failed."
+```
+
+### One last distinction
+
+This:
+
+```ts
+(resolve) => {
+   resolve("Done");
+}
+```
+
+is a **callback**.
+
+This:
+
+```ts
+resolve("Done");
+```
+
+is **fulfilling the Promise**.
+
+And this:
+
+```ts
+await somePromise;
+```
+
+is **consuming/waiting for the Promise's result**.
+
+Those are three different things.
+
+Once that distinction is clear, we're ready to look at **`.then()` and `.catch()`**, and then you'll see exactly how `async/await` is essentially a much cleaner way of working with Promises.
