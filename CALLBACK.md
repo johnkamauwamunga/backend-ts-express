@@ -997,3 +997,308 @@ is **consuming/waiting for the Promise's result**.
 Those are three different things.
 
 Once that distinction is clear, we're ready to look at **`.then()` and `.catch()`**, and then you'll see exactly how `async/await` is essentially a much cleaner way of working with Promises.
+
+Yep. Let's continue. 🔥
+
+We've built the **producer → queue → worker** mechanism. Now we need to make the worker behave more like a real worker.
+
+## Step 4 — Job handlers
+
+Right now our worker basically does:
+
+```text
+take job
+  ↓
+print something
+```
+
+But a real worker needs to know **what action to perform**.
+
+Think of the queue as receiving different kinds of work:
+
+```text
+Queue
+──────────────────────
+send-email
+send-notification
+generate-report
+resize-image
+```
+
+The worker needs a dispatcher:
+
+```text
+Job
+ ↓
+What type?
+ ├── send-email        → email handler
+ ├── send-notification → notification handler
+ └── generate-report   → report handler
+```
+
+We can represent that very simply:
+
+```ts
+function processJob(job) {
+  switch (job.type) {
+    case "send-email":
+      // send email
+      break;
+
+    case "send-notification":
+      // send notification
+      break;
+
+    default:
+      console.log("Unknown job type");
+  }
+}
+```
+
+Notice something important:
+
+**The queue doesn't care what the job actually does.**
+
+It only stores:
+
+```ts
+{
+  type: "...",
+  data: {...}
+}
+```
+
+The **worker** decides how to process it.
+
+---
+
+# Step 5 — Now imagine multiple jobs
+
+Suppose our application does:
+
+```ts
+addJob({
+  type: "send-email",
+  data: {
+    to: "john@example.com"
+  }
+});
+
+addJob({
+  type: "send-notification",
+  data: {
+    to: "john@example.com"
+  }
+});
+```
+
+The queue becomes:
+
+```text
+┌──────────────────────────┐
+│ send-email               │
+├──────────────────────────┤
+│ send-notification        │
+└──────────────────────────┘
+```
+
+The worker processes them one at a time:
+
+```text
+Worker
+  ↓
+Job 1 → send email
+  ↓
+Job 2 → send notification
+```
+
+But here's a problem.
+
+What if there are **10,000 jobs**?
+
+One worker doing:
+
+```text
+Job 1
+ ↓
+Job 2
+ ↓
+Job 3
+ ↓
+...
+Job 10,000
+```
+
+could take a long time.
+
+So we introduce **multiple workers**.
+
+```text
+                 Queue
+                   ↓
+        ┌──────────┼──────────┐
+        ↓          ↓          ↓
+     Worker 1   Worker 2   Worker 3
+        ↓          ↓          ↓
+      Job A      Job B      Job C
+```
+
+Now jobs can be processed concurrently.
+
+---
+
+# Step 6 — But what if a job fails?
+
+This is where background jobs become much more interesting.
+
+Suppose:
+
+```text
+Worker
+  ↓
+sendEmail()
+  ↓
+❌ Email provider unavailable
+```
+
+We don't necessarily want to throw the job away.
+
+Instead:
+
+```text
+Job
+ ↓
+attempt 1 ❌
+ ↓
+retry
+ ↓
+attempt 2 ❌
+ ↓
+retry
+ ↓
+attempt 3 ✅
+```
+
+So a real job contains metadata such as:
+
+```ts
+{
+  type: "send-email",
+
+  data: {
+    to: "john@example.com"
+  },
+
+  attempts: 0
+}
+```
+
+The queue/worker system can manage:
+
+* attempts
+* retries
+* delays
+* failures
+* completed jobs
+
+---
+
+## And here's the bigger picture
+
+We're gradually building this:
+
+```text
+                     EVENTRA API
+                         │
+                         │ add job
+                         ↓
+                 ┌───────────────┐
+                 │   JOB QUEUE   │
+                 └───────┬───────┘
+                         │
+               ┌─────────┼─────────┐
+               ↓         ↓         ↓
+           Worker 1  Worker 2  Worker 3
+               │         │         │
+               ↓         ↓         ↓
+            Email     Notify     Reports
+               │
+               ↓
+        External services
+```
+
+And eventually, instead of our homemade:
+
+```ts
+const jobs = [];
+```
+
+we'll use **Redis + BullMQ**.
+
+BullMQ will give us the machinery we've just been manually imagining:
+
+```text
+Queue
+Workers
+Retries
+Concurrency
+Delayed jobs
+Job IDs
+Job status
+Failure handling
+```
+
+But because you've built the primitive version first, when you see:
+
+```ts
+queue.add("send-email", data);
+```
+
+you'll understand what's actually happening underneath.
+
+---
+
+### One final concept before we touch BullMQ
+
+There is an important distinction between:
+
+**"Do this later"**
+
+and
+
+**"Do this asynchronously."**
+
+A background job can be:
+
+```text
+Immediate but asynchronous
+```
+
+or:
+
+```text
+Delayed until a specific time
+```
+
+For example, Eventra could create:
+
+```text
+Send confirmation email → immediately queued
+```
+
+but also:
+
+```text
+Send event reminder → 24 hours before event
+```
+
+The second one is a **delayed job**.
+
+That's another major feature of job queues.
+
+So we've now covered the core mechanics:
+
+**Producer → Queue → Worker → Handler → Retry/Failure → Multiple Workers → Delayed Jobs.**
+
+Next, we can take this exact mental model and build it with **Redis + BullMQ**, then plug it into your Eventra backend.
+
